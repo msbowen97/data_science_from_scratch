@@ -74,14 +74,17 @@ class Method:
             'random_forest': 'rf',
             'rf': 'rf',
             'gradient_booster': 'gb',
-            'gb': 'gb'
+            'gb': 'gb',
+            'genetic_algorithm': 'ga',
+            'ga': 'ga'
         }
 
         optimizers = {
             'gd': GradientDescent,
             'sa': SimulatedAnnealing,
             'rf': RandomForest,
-            'gb': GradientBooster
+            'gb': GradientBooster,
+            'ga': GeneticAlgorithm
         }
 
         return optimizers[optimizerAliases[optimizerMethod.lower()]](optimizerMethod=optimizerMethod, **optimizerParams)
@@ -205,7 +208,7 @@ class LossFunction:
         self.loss = self.get_loss(y)
         self.grad = self.get_grad(X, y) if calcGrad else 0
 
-    def get_loss(self, y):
+    def get_loss(self, y, axis=0):
         '''
         Calculate the appopriate loss function given the model predictions and actual output.
 
@@ -215,15 +218,16 @@ class LossFunction:
             Output data being predicted by yHat.
         '''
         losses = {
-            'mse': lambda y: np.mean((y - self.yHat)**2),
-            'mae': lambda y: np.mean(np.abs(y - self.yHat)),
+            'mse': lambda y: np.mean((y - self.yHat)**2, axis=axis),
+            'mae': lambda y: np.mean(np.abs(y - self.yHat), axis=axis),
             'huber': lambda y: np.mean(0.5 * (y - self.yHat) ** 2 if np.abs(y - self.yHat) <= self.delta \
-                                                                    else self.delta * (np.abs(y - self.yHat) - self.delta / 2)),
-            'binary_cross_entropy': lambda y: -np.mean(y * np.log(self.yHat+1e-10) + (1 - y) * np.log(1 - self.yHat+1e-10)),
-            'cross_entropy': lambda y: np.mean(-y * np.ln(self.yHat)),
-            'hinge': lambda y: np.max(0, 1 - y * self.yHat), # -1 <= y <= 1, used for SVMs
-            'gini': lambda counts: 0.0 if counts.sum() == 0.0 else 1 - np.sum((counts / counts.sum()) ** 2),
-            'entropy': lambda counts: 0.0 if counts.sum() == 0.0 else  -np.sum((counts / counts.sum()) * np.log2(counts / counts.sum() + 1e-10))
+                                                                    else self.delta * (np.abs(y - self.yHat) - self.delta / 2), axis=axis),
+            'binary_cross_entropy': lambda y: -np.mean(y * np.log(self.yHat+1e-10) + (1 - y) * np.log(1 - self.yHat+1e-10), axis=axis),
+            'cross_entropy': lambda y: np.mean(-y * np.ln(self.yHat), axis=axis),
+            'hinge': lambda y: np.max(0, 1 - y * self.yHat, axis=axis), # -1 <= y <= 1, used for SVMs
+            'gini': lambda counts: 0.0 if counts.sum() == 0.0 else 1 - np.sum((counts / counts.sum()) ** 2, axis=axis),
+            'entropy': lambda counts: 0.0 if counts.sum() == 0.0 else  -np.sum((counts / counts.sum()) 
+                                                                               * np.log2(counts / counts.sum() + 1e-10), axis=axis)
         }
 
         return losses[self.lossMethod](y)
@@ -291,8 +295,8 @@ class OptimizerPrototype:
     def __init__(self, optimizerMethod, maxEpochs=1e4, minEpochs=1e2, gradThreshold=1e-5, lossThreshold=1e-5, lossWindow=100, 
                  aliases = {}):
         self.optimizerMethod = optimizerMethod
-        self.maxEpochs = maxEpochs
-        self.minEpochs = minEpochs
+        self.maxEpochs = int(maxEpochs)
+        self.minEpochs = int(minEpochs)
         self.gradThreshold = gradThreshold
         self.lossThreshold = lossThreshold
         self.lossWindow = lossWindow
@@ -1156,7 +1160,90 @@ class GradientBooster(RandomForest): # Flawed, gradients not matching loss funct
             return np.round(self.yProb) # assumes turning point at 0.5
         else:
             return yHat
-      
+        
+class GeneticAlgorithm(OptimizerPrototype):
+    def __init__(self, optimizerMethod, maxEpochs=1e4, minEpochs=1e2, gradThreshold=0, initalGuess='random', thetaMax=1, thetaMin=0,
+                 lossThreshold=1e-5, lossWindow=100, mutationRate = 0.01, populationSize=100):
+        '''
+        Initialize the GeneticAlgorithm class.
+        '''
+        aliases = {
+            'genetic_algorithm': 'ga',
+            'ga': 'ga'
+        }
+        super().__init__(optimizerMethod=optimizerMethod, maxEpochs=maxEpochs,
+                         minEpochs=minEpochs, gradThreshold=gradThreshold, lossThreshold=lossThreshold,
+                         lossWindow=lossWindow, aliases=aliases)
+        
+        self.mutationRate = mutationRate
+        self.initialGuess = initalGuess
+        self.populationSize = int(populationSize)
+        self.thetaMax, self.thetaMin = thetaMax, thetaMin
+        self.bestLoss = np.inf
+
+    def __call__(self, X, y, model, lossFunc):
+        super().__call__(X=X, y=y, model=model, lossFunc=lossFunc)
+        self.train()
+
+    def _generate_initial_population(self):
+        return np.random.uniform(size=(self.X.shape[1], self.populationSize), low=self.thetaMin, high=self.thetaMax)
+
+    def _get_top_scorers(self, n=10):
+        colY = self.y[:,np.newaxis]
+
+        scores = np.empty(self.populationSize)
+        batchSize=20
+
+        for i in range(0, self.populationSize, batchSize):
+            sl = slice(i, i + batchSize)
+            yHat = self.model._calc_y_hat(self.X, self.population[:, sl])
+            self.lossFunc(None, colY, yHat, calcGrad=False)
+            scores[sl] = self.lossFunc.loss
+
+        self.losses.append(np.mean(scores))
+        bestScorer = np.argmin(scores)
+        if scores[bestScorer] < self.bestLoss:
+            self.bestLoss = scores[bestScorer]
+            self.theta = self.population[:,bestScorer]
+            self.thetas.append(self.theta)
+
+        return self.population[:, np.argpartition(scores, n)[:n]]
+    
+    def _mutate(self, pop):
+        mask = np.random.rand(*pop.shape) < self.mutationRate
+        pop[mask] += np.random.uniform(low=-self.thetaMax / 2,high=self.thetaMax / 2,size=np.count_nonzero(mask))
+
+        crossoverCols = np.random.randint(0, self.population.shape[1]-1, self.mutationNo * 2)
+        crossoverRows = np.random.randint(0, self.population.shape[0]-1, self.mutationNo * 2)
+
+        pop[crossoverRows[:self.mutationNo], crossoverCols[:self.mutationNo]] = pop[crossoverRows[self.mutationNo:], 
+                                                                                    crossoverCols[self.mutationNo:]]
+
+        return pop
+    
+    def _get_next_generation(self):
+        children = np.random.randint(0,self.topScorers.shape[1],size=(self.populationSize - self.topScorers.shape[1],))
+        offspring = np.take(self.topScorers, children, axis=1)
+
+        return self._mutate(np.concatenate([self.topScorers, offspring], axis=1))
+
+    def train(self):
+        self.population = self._generate_initial_population()
+        self.mutationNo = int(self.population.size * self.mutationRate)
+
+        for i in range(self.maxEpochs):
+            self.topScorers = self._get_top_scorers()
+            self.population = np.clip(self._get_next_generation(), self.thetaMin, self.thetaMax)
+
+    def predict(self, X, theta=None, binary=False):
+        theta = theta if theta is not None else self.theta
+        yHat = self.model._calc_y_hat(X=X, theta=theta)
+
+        if binary:
+            return np.round(yHat)
+        else:
+            return yHat
+
     # def newton(self, X, y):
     #     pass
 
