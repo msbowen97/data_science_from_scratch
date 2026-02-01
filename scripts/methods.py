@@ -43,7 +43,7 @@ class Validator:
         return np.mean(yHats, axis=0)
     
 class Method:
-    def __init__(self, modelMethod, lossMethod, optimizerMethod, modelParams={}, lossParams={}, optimizerParams={}):
+    def __init__(self, optimizerMethod, modelMethod='linreg', lossMethod='mse', modelParams={}, lossParams={}, optimizerParams={}):
         self.model = self._get_model(modelMethod=modelMethod, modelParams=modelParams)
         self.lossFunction = self._get_loss_function(modelMethod=modelMethod, lossMethod=lossMethod, lossParams=lossParams)
         self.optimizer = self._get_optimizer(optimizerMethod=optimizerMethod, optimizerParams=optimizerParams)
@@ -78,16 +78,19 @@ class Method:
             'genetic_algorithm': 'ga',
             'ga': 'ga',
             'newtons_method': 'nm',
-            'nm': 'nm'
+            'nm': 'nm',
+            'k_nearest_neighbors': 'knn',
+            'knn': 'knn'
         }
 
         optimizers = {
             'gd': GradientDescent,
             'sa': SimulatedAnnealing,
             'rf': RandomForest,
-            'gb': GradientBooster,
+            #'gb': GradientBooster,
             'ga': GeneticAlgorithm,
-            'nm': NewtonsMethod
+            #'nm': NewtonsMethod,
+            'knn': KNN
         }
 
         return optimizers[optimizerAliases[optimizerMethod.lower()]](optimizerMethod=optimizerMethod, **optimizerParams)
@@ -299,7 +302,7 @@ class LossFunction:
 
 class OptimizerPrototype:
     def __init__(self, optimizerMethod, maxEpochs=1e4, minEpochs=1e2, gradThreshold=1e-5, lossThreshold=1e-5, lossWindow=100, 
-                 aliases = {}):
+                 aliases = {}, classification=False):
         self.optimizerMethod = optimizerMethod
         self.maxEpochs = int(maxEpochs)
         self.minEpochs = int(minEpochs)
@@ -308,6 +311,7 @@ class OptimizerPrototype:
         self.lossWindow = lossWindow
         self.losses, self.thetas = [], []
         self.aliases = aliases
+        self.classification = classification
 
     def __call__(self, X, y, model, lossFunc):
         self.model = model
@@ -1112,60 +1116,60 @@ class RandomForest(DecisionTree):
         else:
             return np.mean(yHat, axis=1)
         
-class GradientBooster(RandomForest): # Flawed, gradients not matching loss function, need to incorporate Hessian?
-    def __init__(self, optimizerMethod, lossMethod, nCols=1, nRows=1, maxTreeDepth=2, minGroupSize=5, splitMethod='histogram',
-                 maxBoosterDepth=200, lr=0.1, classification=False):
-        super().__init__(lossMethod='mse', maxTreeDepth=maxTreeDepth, minGroupSize=minGroupSize,
-                         splitMethod=splitMethod, nCols=nCols, nRows=nRows, nTrees=1, classification=False)
-        self.maxBoosterDepth = maxBoosterDepth
-        self.lr = lr
-        self.yProb = None
+# class GradientBooster(RandomForest): # Flawed, gradients not matching loss function, need to incorporate Hessian?
+#     def __init__(self, optimizerMethod, lossMethod, nCols=1, nRows=1, maxTreeDepth=2, minGroupSize=5, splitMethod='histogram',
+#                  maxBoosterDepth=200, lr=0.1, classification=False):
+#         super().__init__(lossMethod='mse', maxTreeDepth=maxTreeDepth, minGroupSize=minGroupSize,
+#                          splitMethod=splitMethod, nCols=nCols, nRows=nRows, nTrees=1, classification=False)
+#         self.maxBoosterDepth = maxBoosterDepth
+#         self.lr = lr
+#         self.yProb = None
 
-    def __call__(self, X, y, model, lossFunc):
-        self.lossFunc = lossFunc
-        self.colNames = X.columns
-        X_np, y_np = np.asarray(X, dtype=np.float32, order="C"), np.asarray(y, dtype=np.int32, order="C")
-        self.train(X_np, y_np)
+#     def __call__(self, X, y, model, lossFunc):
+#         self.lossFunc = lossFunc
+#         self.colNames = X.columns
+#         X_np, y_np = np.asarray(X, dtype=np.float32, order="C"), np.asarray(y, dtype=np.int32, order="C")
+#         self.train(X_np, y_np)
 
-    def _calc_sigmoid(self, yHat):
-        z = np.clip(yHat, -20, 20)
-        return 1 / (1 + np.exp(-z))
+#     def _calc_sigmoid(self, yHat):
+#         z = np.clip(yHat, -20, 20)
+#         return 1 / (1 + np.exp(-z))
     
-    def train(self, X, y):
-        N = y.shape[0]
-        self.targets, self.boosters = np.zeros((self.maxBoosterDepth, N), dtype=np.float64), np.empty((self.maxBoosterDepth,), dtype=object)
-        self.targets[0] = y
-        treePrototype = RandomForest(lossMethod=self.lossMethod, maxTreeDepth=self.maxTreeDepth, nTrees=1,
-                                    minGroupSize=self.minGroupSize, nCols=1, nRows=1, splitMethod=self.splitMethod,
-                                    colNames=self.colNames, classification=self.classification)
+#     def train(self, X, y):
+#         N = y.shape[0]
+#         self.targets, self.boosters = np.zeros((self.maxBoosterDepth, N), dtype=np.float64), np.empty((self.maxBoosterDepth,), dtype=object)
+#         self.targets[0] = y
+#         treePrototype = RandomForest(lossMethod=self.lossMethod, maxTreeDepth=self.maxTreeDepth, nTrees=1,
+#                                     minGroupSize=self.minGroupSize, nCols=1, nRows=1, splitMethod=self.splitMethod,
+#                                     colNames=self.colNames, classification=self.classification)
         
-        yMean = np.clip(y.mean(), 1e-6, 1 - 1e-6)
-        yHat = np.full(N, np.log(yMean / (1 - yMean)))
+#         yMean = np.clip(y.mean(), 1e-6, 1 - 1e-6)
+#         yHat = np.full(N, np.log(yMean / (1 - yMean)))
 
-        for i in range(self.maxBoosterDepth):
-            prob = self._calc_sigmoid(yHat)
-            grad = y - prob
-            self.boosters[i] = copy.deepcopy(treePrototype)
-            self.boosters[i](X, grad, model=None, lossFunc=self.lossFunc)
-            yHat += self.boosters[i].predict(X=X, theta=self.theta, binary=False) * self.lr
+#         for i in range(self.maxBoosterDepth):
+#             prob = self._calc_sigmoid(yHat)
+#             grad = y - prob
+#             self.boosters[i] = copy.deepcopy(treePrototype)
+#             self.boosters[i](X, grad, model=None, lossFunc=self.lossFunc)
+#             yHat += self.boosters[i].predict(X=X, theta=self.theta, binary=False) * self.lr
 
-            print(
-                f"iter {i}: "
-                f"prob mean={prob.mean():.3f}, "
-                f"grad std={grad.std():.3f}, "
-                f"yHat std={yHat.std():.3f}"
-            )
+#             print(
+#                 f"iter {i}: "
+#                 f"prob mean={prob.mean():.3f}, "
+#                 f"grad std={grad.std():.3f}, "
+#                 f"yHat std={yHat.std():.3f}"
+#             )
 
-    def predict(self, X, theta=None, binary=True):
-        yHat = np.zeros((X.shape[0],), dtype=np.float64)
-        for i in range(len(self.boosters)):
-            yHat += self.boosters[i].predict(X=X, theta=theta, binary=False) * self.lr
+#     def predict(self, X, theta=None, binary=True):
+#         yHat = np.zeros((X.shape[0],), dtype=np.float64)
+#         for i in range(len(self.boosters)):
+#             yHat += self.boosters[i].predict(X=X, theta=theta, binary=False) * self.lr
 
-        if binary:
-            self.yProb = self._calc_sigmoid(yHat=yHat)
-            return np.round(self.yProb) # assumes turning point at 0.5
-        else:
-            return yHat
+#         if binary:
+#             self.yProb = self._calc_sigmoid(yHat=yHat)
+#             return np.round(self.yProb) # assumes turning point at 0.5
+#         else:
+#             return yHat
         
 class GeneticAlgorithm(OptimizerPrototype):
     def __init__(self, optimizerMethod, maxEpochs=1e4, minEpochs=1e2, gradThreshold=0, initialGuess='random', thetaMax=1, thetaMin=0,
@@ -1250,49 +1254,80 @@ class GeneticAlgorithm(OptimizerPrototype):
         else:
             return yHat
         
-class NewtonsMethod(OptimizerPrototype):
-    def __init__(self, optimizerMethod, maxEpochs=1e4, minEpochs=1e2, gradThreshold=0, initialGuess='zeros'):
-        super().__init__(optimizerMethod=optimizerMethod, maxEpochs=maxEpochs, minEpochs=minEpochs, gradThreshold=gradThreshold)
-        self.initialGuess = initialGuess
+class KNN(OptimizerPrototype):
+    def __init__(self, optimizerMethod, distanceMethod='euclidean', numNeighbors=10, classification=True, weighting=True):
+        super().__init__(optimizerMethod=optimizerMethod, classification=classification)
+        self.distanceMethod = distanceMethod
+        self.numNeighbors = numNeighbors
+        self.weighting = weighting
 
-    def __call__(self, X, y, model, lossFunc):
-        super().__call__(X=X, y=y, model=model, lossFunc=lossFunc)
-        self.train()
+    def __call__(self, X, y, model=None, lossFunc=None):
+        super().__call__(X=X, y=y, model=None, lossFunc=None)
 
-    def train(self):
-        self.theta = self._generate_initial_theta(X=self.X)
+    def _calc_distance(self, x):
+        return np.sum((self.X - x) ** 2, axis=1)
+    
+    def _calc_nearest(self, x):
+        distances = self._calc_distance(x)
+        neighborIDs = np.argsort(distances)[:self.numNeighbors]
+        weights = 1 / (distances + 1e-10)
+        return self.y[neighborIDs], weights[neighborIDs]
+    
+    def predict(self, X):
+        X = np.array(X)
+        yHat = np.empty((X.shape[0]), dtype=np.float32)
+        for i in range(yHat.shape[0]):
+            neighbors, weights = self._calc_nearest(X[i])
 
-        for i in range(self.maxEpochs):
-            yHat = self.model._calc_y_hat(self.X, self.theta)
-            self.lossFunc(X=self.X, y=self.y, yHat=yHat)
+            if self.classification:
+                if not self.weighting:
+                    values, counts = np.unique(neighbors, return_counts=True)
+                else:
+                    values = np.unique(neighbors)
+                    counts = np.array([np.sum(weights[neighbors == val]) for val in values])
 
-            self.thetas.append(self.theta)
-            self.losses.append(self.lossFunc.loss)
+                yHat[i] = values[np.argmax(counts)]
+            else:
+                if not self.weighting:
+                    yHat[i] = np.mean(neighbors)
+                else:
+                    yHat[i] = np.mean((neighbors * weights)/np.sum(weights))
 
-            self.theta -= self.lossFunc.loss / (self.lossFunc.grad + 1e-10)
-
-            if self._check_convergence(epoch=i, grad=self.lossFunc.grad, losses=self.losses):
-                self.thetas.append(self.theta)
-                break
-
-    def predict(self, X, binary=False):
-        yHat =  self.model._calc_y_hat(X=X, theta=self.theta)
-
-        if binary:
-            return np.round(yHat)
-        else:
-            return yHat
-
-
-
+        return yHat
         
+# class NewtonsMethod(OptimizerPrototype):
+#     def __init__(self, optimizerMethod, maxEpochs=1e4, minEpochs=1e2, gradThreshold=0, initialGuess='zeros'):
+#         super().__init__(optimizerMethod=optimizerMethod, maxEpochs=maxEpochs, minEpochs=minEpochs, gradThreshold=gradThreshold)
+#         self.initialGuess = initialGuess
 
+#     def __call__(self, X, y, model, lossFunc):
+#         super().__call__(X=X, y=y, model=model, lossFunc=lossFunc)
+#         self.train()
 
-    # def newton(self, X, y):
-    #     pass
+#     def train(self):
+#         self.theta = self._generate_initial_theta(X=self.X)
 
-    # def genetic_algorithm(self, X, y):
-    #     pass
+#         for i in range(self.maxEpochs):
+#             yHat = self.model._calc_y_hat(self.X, self.theta)
+#             self.lossFunc(X=self.X, y=self.y, yHat=yHat)
+
+#             self.thetas.append(self.theta.copy())
+#             self.losses.append(self.lossFunc.loss.copy())
+
+#             self.theta -= self.lossFunc.loss / (self.lossFunc.grad + 1e-10)
+
+#             if self._check_convergence(epoch=i, grad=self.lossFunc.grad, losses=self.losses):
+#                 self.thetas.append(self.theta)
+#                 break
+
+#     def predict(self, X, binary=False):
+#         yHat =  self.model._calc_y_hat(X=X, theta=self.theta)
+
+#         if binary:
+#             return np.round(yHat)
+#         else:
+#             return yHat
+
 
     # def bayesian(self, X, y):
     #     pass

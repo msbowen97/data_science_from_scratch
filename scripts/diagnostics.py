@@ -23,7 +23,7 @@ class Diagnostics:
             diagnosticStr = ''
 
             for key, val in self.diagnostics.items():
-                diagnosticStr += f'{key}: {val}, ' if val else ''
+                diagnosticStr += f'{key}: {val}, ' if val is not None else ''
 
             print(diagnosticStr[:-2])
 
