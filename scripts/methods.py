@@ -1255,11 +1255,14 @@ class GeneticAlgorithm(OptimizerPrototype):
             return yHat
         
 class KNN(OptimizerPrototype):
-    def __init__(self, optimizerMethod, distanceMethod='euclidean', numNeighbors=10, classification=True, weighting=True):
+    # To-do: Adaptive-k
+    def __init__(self, optimizerMethod, distanceMethod='euclidean', weightMethod='distance', numNeighbors=10, classification=True, 
+                 sigma=1.0):
         super().__init__(optimizerMethod=optimizerMethod, classification=classification)
         self.distanceMethod = distanceMethod
         self.numNeighbors = numNeighbors
-        self.weighting = weighting
+        self.weightMethod = weightMethod
+        self.sigma = sigma
 
     def __call__(self, X, y, model=None, lossFunc=None):
         super().__call__(X=X, y=y, model=None, lossFunc=None)
@@ -1270,8 +1273,16 @@ class KNN(OptimizerPrototype):
     def _calc_nearest(self, x):
         distances = self._calc_distance(x)
         neighborIDs = np.argsort(distances)[:self.numNeighbors]
-        weights = 1 / (distances + 1e-10)
+        weights = self._calc_weights(distances)
         return self.y[neighborIDs], weights[neighborIDs]
+    
+    def _calc_weights(self, distances):
+        if self.weightMethod == 'distance':
+            return 1 / (distances + 1e-10)
+        elif self.weightMethod == 'gaussian':
+            return np.exp(-distances ** 2 / (2 * self.sigma))
+        else:
+            return np.ones((distances.shape[0],), dtype=np.float32)
     
     def predict(self, X):
         X = np.array(X)
@@ -1280,18 +1291,12 @@ class KNN(OptimizerPrototype):
             neighbors, weights = self._calc_nearest(X[i])
 
             if self.classification:
-                if not self.weighting:
-                    values, counts = np.unique(neighbors, return_counts=True)
-                else:
-                    values = np.unique(neighbors)
-                    counts = np.array([np.sum(weights[neighbors == val]) for val in values])
+                values = np.unique(neighbors)
+                counts = np.array([np.sum(weights[neighbors == val]) for val in values])
 
                 yHat[i] = values[np.argmax(counts)]
             else:
-                if not self.weighting:
-                    yHat[i] = np.mean(neighbors)
-                else:
-                    yHat[i] = np.mean((neighbors * weights)/np.sum(weights))
+                yHat[i] = np.mean((neighbors * weights)/np.sum(weights))
 
         return yHat
         
