@@ -8,19 +8,20 @@ import copy
 
 class Preprocessor:
     def __init__(self, onehotCols=None, directCols=None, ordinalCols=None, dropCols=None, imputerMethod='lazy', normalizerMethod='zscore',
-                 splitterMethod='kfold', validationSplit=0.2, splitGroups=5, bagging=True):
+                 splitterMethod='kfold', validationSplit=0.2, splitGroups=5, bagging=True, corrThreshold=0.7):
         self.quantifier = Quantifier(onehotCols=onehotCols, directCols=directCols, ordinalCols=ordinalCols, dropCols=dropCols)
         self.imputer = Imputer(method=imputerMethod)
         self.normalizer = Normalizer(method=normalizerMethod)
+        self.correlationRemover = CorrelationRemover(threshold=corrThreshold)
         self.splitter = Splitter(method=splitterMethod, validationSplit=validationSplit, groups=splitGroups, bagging=bagging)
 
     def __call__(self, X, y):
         X = self.transform(X)
         self.split(X, y)
 
-    def transform(self, X, means=None, stds=None, maximum=None, minimum=None, norms=None):
-        return self.normalizer(self.imputer(self.quantifier(X)), maximum=maximum, minimum=minimum, means=means, stds=stds,
-                               norms=norms)
+    def transform(self, X, means=None, stds=None, corrCols=None, maximum=None, minimum=None, norms=None):
+        return self.normalizer(self.correlationRemover(self.imputer(self.quantifier(X)), corrCols=corrCols), maximum=maximum, 
+                                minimum=minimum, means=means, stds=stds, norms=norms)
     
     def split(self, X, y):
         self.splitter(X,y)
@@ -113,6 +114,27 @@ class Imputer(Preprocessor):
     
     def iterative_imputer(self, X):
         pass
+
+class CorrelationRemover:
+    def __init__(self, threshold=0.7):
+        self.threshold=threshold
+
+    def __call__(self, X, corrCols=None):
+        self.corrCols = corrCols
+        if self.corrCols:
+            return X.drop(self.corrCols, axis=1)
+        
+        corrData = X.corr().abs()
+        threshold = 0.95
+        self.corrCols = []
+
+        for i in range(len(X.columns)):
+            correlatedCols = X.columns[i+1:][corrData[X.columns[i]][X.columns[i+1:]] >= threshold]
+            for col in correlatedCols:
+                print(f'Removing {col} for its relation to {X.columns[i]}')
+                self.corrCols.append(col)
+                
+        return X.drop(self.corrCols, axis=1)
 
 class Normalizer:
     '''
